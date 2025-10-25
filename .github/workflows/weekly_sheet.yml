@@ -24,10 +24,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run weekly Google Sheet generation
-        env:
-          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
-          SHEET_ID: ${{ secrets.SHEET_ID }}
+      - name: Run weekly script
         run: |
-          echo "$GOOGLE_SHEETS_CREDENTIALS" > credentials.json
+          echo "$GOOGLE_CLIENT_SECRET" > client_secret.json
+          echo "$GOOGLE_OAUTH_TOKEN" > token.json
           python app/generate_next_week.py
+        env:
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_OAUTH_TOKEN: ${{ secrets.GOOGLE_OAUTH_TOKEN }}
+          SHEET_ID: ${{ secrets.SHEET_ID }}
