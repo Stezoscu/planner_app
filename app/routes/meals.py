@@ -1,31 +1,21 @@
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime
 from ..extensions import db
 from ..models.core_models import Meal
-from .auth import is_admin
+from ..firebase_utils import firebase_required
 
 meals_bp = Blueprint("meals", __name__)
 
-# --- Get all meals (admin can see all; users see their own) ---
+# --- Get all meals ---
 @meals_bp.route("/", methods=["GET"])
-@jwt_required()
+@firebase_required
 def get_meals():
-    identity = get_jwt_identity()
-    user_id = int(identity) if isinstance(identity, str) else identity.get("id")
-    admin = is_admin(identity)
+    user = request.user
+    user_id = user.get("uid")
+
     date_filter = request.args.get("date")
-    filter_user_id = request.args.get("user_id", type=int)
 
-    query = Meal.query
-
-    if admin:
-        # Admin can filter by user_id
-        if filter_user_id:
-            query = query.filter_by(user_id=filter_user_id)
-    else:
-        # Regular users only see their own
-        query = query.filter_by(user_id=user_id)
+    query = Meal.query.filter_by(user_id=user_id)
 
     # Optional date filter
     if date_filter:
@@ -46,22 +36,20 @@ def get_meals():
             "carbs": m.carbs,
             "fibre": m.fibre,
             "date": m.date.isoformat(),
-            "user_id": m.user_id
         }
         for m in meals
-    ])
+    ]), 200
 
 
 # --- Get a single meal ---
 @meals_bp.route("/<int:meal_id>", methods=["GET"])
-@jwt_required()
+@firebase_required
 def get_meal(meal_id):
-    identity = get_jwt_identity()
-    user_id = int(identity) if isinstance(identity, str) else identity.get("id")
-    admin = is_admin(identity)
+    user = request.user
+    user_id = user.get("uid")
 
     meal = Meal.query.get_or_404(meal_id)
-    if not admin and meal.user_id != user_id:
+    if meal.user_id != user_id:
         return jsonify({"error": "Not authorised"}), 403
 
     return jsonify({
@@ -72,17 +60,15 @@ def get_meal(meal_id):
         "carbs": meal.carbs,
         "fibre": meal.fibre,
         "date": meal.date.isoformat(),
-        "user_id": meal.user_id
-    })
+    }), 200
 
 
 # --- Create a new meal ---
 @meals_bp.route("/", methods=["POST"])
-@jwt_required()
+@firebase_required
 def add_meal():
-    identity = get_jwt_identity()
-    user_id = int(identity) if isinstance(identity, str) else identity.get("id")
-    admin = is_admin(identity)
+    user = request.user
+    user_id = user.get("uid")
     data = request.get_json() or {}
 
     name = data.get("name")
@@ -92,14 +78,7 @@ def add_meal():
     try:
         meal_date = datetime.fromisoformat(data["date"]).date() if data.get("date") else datetime.now().date()
     except ValueError:
-        return jsonify({"error": "Invalid date format, use YYYY-MM-DD"}), 400
-
-    # Admin can assign meals to other users
-    assigned_user_id = data.get("user_id", user_id if not admin else None)
-    if admin and "user_id" in data:
-        assigned_user_id = data["user_id"]
-    elif not admin:
-        assigned_user_id = user_id
+        return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
 
     new_meal = Meal(
         name=name,
@@ -108,7 +87,7 @@ def add_meal():
         carbs=data.get("carbs"),
         fibre=data.get("fibre"),
         date=meal_date,
-        user_id=assigned_user_id
+        user_id=user_id,
     )
 
     db.session.add(new_meal)
@@ -118,14 +97,13 @@ def add_meal():
 
 # --- Update a meal ---
 @meals_bp.route("/<int:meal_id>", methods=["PUT"])
-@jwt_required()
+@firebase_required
 def update_meal(meal_id):
-    identity = get_jwt_identity()
-    user_id = int(identity) if isinstance(identity, str) else identity.get("id")
-    admin = is_admin(identity)
+    user = request.user
+    user_id = user.get("uid")
 
     meal = Meal.query.get_or_404(meal_id)
-    if not admin and meal.user_id != user_id:
+    if meal.user_id != user_id:
         return jsonify({"error": "Not authorised"}), 403
 
     data = request.get_json() or {}
@@ -138,24 +116,23 @@ def update_meal(meal_id):
         try:
             meal.date = datetime.fromisoformat(data["date"]).date()
         except ValueError:
-            return jsonify({"error": "Invalid date format, use YYYY-MM-DD"}), 400
+            return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
 
     db.session.commit()
-    return jsonify({"message": "Meal updated successfully"})
+    return jsonify({"message": "Meal updated successfully"}), 200
 
 
 # --- Delete a meal ---
 @meals_bp.route("/<int:meal_id>", methods=["DELETE"])
-@jwt_required()
+@firebase_required
 def delete_meal(meal_id):
-    identity = get_jwt_identity()
-    user_id = int(identity) if isinstance(identity, str) else identity.get("id")
-    admin = is_admin(identity)
+    user = request.user
+    user_id = user.get("uid")
 
     meal = Meal.query.get_or_404(meal_id)
-    if not admin and meal.user_id != user_id:
+    if meal.user_id != user_id:
         return jsonify({"error": "Not authorised"}), 403
 
     db.session.delete(meal)
     db.session.commit()
-    return jsonify({"message": "Meal deleted successfully"})
+    return jsonify({"message": "Meal deleted successfully"}), 200

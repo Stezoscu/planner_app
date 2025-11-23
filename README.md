@@ -8,6 +8,9 @@ This is the backend API for the **Family Hub Planner App** — a lightweight per
 - 🔐 JWT authentication (login / register)
 
 ---
+Weekly Workflow Status:
+[![Generate Next Week's Google Sheet](https://github.com/Stezoscu/planner_app/actions/workflows/weekly_sheet.yml/badge.svg)](https://github.com/Stezoscu/planner_app/actions/workflows/weekly_sheet.yml)
+
 
 ## 🚀 Quick Start
 

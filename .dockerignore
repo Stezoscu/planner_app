@@ -1,0 +1,9 @@
+venv
+__pycache__
+*.pyc
+*.pyo
+*.db
+node_modules
+weekly-planner/node_modules
+.env
+.env.local

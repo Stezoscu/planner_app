@@ -1,30 +1,33 @@
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime
 from ..extensions import db
-from ..models.core_models import Workout
-from .auth import is_admin
+from ..models.core_models import Workout, User
+from ..firebase_utils import firebase_required
 
 workouts_bp = Blueprint("workouts", __name__)
 
+# --- Helper: Check admin role ---
+def is_admin(user):
+    """Check if the Firebase-authenticated user is an admin in the DB."""
+    db_user = User.query.filter_by(id=user.get("uid")).first()
+    return db_user and db_user.role == "admin"
+
+
 # --- Get all workouts (admin can see all; users see their own) ---
 @workouts_bp.route("/", methods=["GET"])
-@jwt_required()
+@firebase_required
 def get_workouts():
-    identity = get_jwt_identity()
-    user_id = int(identity) if isinstance(identity, str) else identity.get("id")
-    admin = is_admin(identity)
+    user = request.user
+    user_id = user.get("uid")
+    admin = is_admin(user)
     date_filter = request.args.get("date")
-    filter_user_id = request.args.get("user_id", type=int)
+    filter_user_id = request.args.get("user_id")
 
     query = Workout.query
 
-    if admin:
-        # Admin can view all or filter by user_id
-        if filter_user_id:
-            query = query.filter_by(user_id=filter_user_id)
-    else:
-        # Regular user: only their own workouts
+    if admin and filter_user_id:
+        query = query.filter_by(user_id=filter_user_id)
+    elif not admin:
         query = query.filter_by(user_id=user_id)
 
     # Optional date filter
@@ -46,16 +49,16 @@ def get_workouts():
             "user_id": w.user_id
         }
         for w in workouts
-    ])
+    ]), 200
 
 
 # --- Get a single workout ---
 @workouts_bp.route("/<int:workout_id>", methods=["GET"])
-@jwt_required()
+@firebase_required
 def get_workout(workout_id):
-    identity = get_jwt_identity()
-    user_id = int(identity) if isinstance(identity, str) else identity.get("id")
-    admin = is_admin(identity)
+    user = request.user
+    user_id = user.get("uid")
+    admin = is_admin(user)
 
     workout = Workout.query.get_or_404(workout_id)
     if not admin and workout.user_id != user_id:
@@ -72,11 +75,11 @@ def get_workout(workout_id):
 
 # --- Create a new workout ---
 @workouts_bp.route("/", methods=["POST"])
-@jwt_required()
+@firebase_required
 def add_workout():
-    identity = get_jwt_identity()
-    user_id = int(identity) if isinstance(identity, str) else identity.get("id")
-    admin = is_admin(identity)
+    user = request.user
+    user_id = user.get("uid")
+    admin = is_admin(user)
     data = request.get_json() or {}
 
     activity = data.get("activity")
@@ -85,16 +88,11 @@ def add_workout():
         return jsonify({"error": "Both 'activity' and 'duration' are required"}), 400
 
     try:
-        workout_date = datetime.fromisoformat(data["date"]).date() if data.get("date") else datetime.now().date()
+        workout_date = datetime.fromisoformat(data.get("date")).date() if data.get("date") else datetime.now().date()
     except ValueError:
         return jsonify({"error": "Invalid date format. Use YYYY-MM-DD"}), 400
 
-    # Admins can assign workouts to other users
-    assigned_user_id = data.get("user_id", user_id if not admin else None)
-    if admin and "user_id" in data:
-        assigned_user_id = data["user_id"]
-    elif not admin:
-        assigned_user_id = user_id
+    assigned_user_id = data.get("user_id") if admin and "user_id" in data else user_id
 
     new_workout = Workout(
         activity=activity,
@@ -110,11 +108,11 @@ def add_workout():
 
 # --- Update a workout ---
 @workouts_bp.route("/<int:workout_id>", methods=["PUT"])
-@jwt_required()
+@firebase_required
 def update_workout(workout_id):
-    identity = get_jwt_identity()
-    user_id = int(identity) if isinstance(identity, str) else identity.get("id")
-    admin = is_admin(identity)
+    user = request.user
+    user_id = user.get("uid")
+    admin = is_admin(user)
 
     workout = Workout.query.get_or_404(workout_id)
     if not admin and workout.user_id != user_id:
@@ -138,11 +136,11 @@ def update_workout(workout_id):
 
 # --- Delete a workout ---
 @workouts_bp.route("/<int:workout_id>", methods=["DELETE"])
-@jwt_required()
+@firebase_required
 def delete_workout(workout_id):
-    identity = get_jwt_identity()
-    user_id = int(identity) if isinstance(identity, str) else identity.get("id")
-    admin = is_admin(identity)
+    user = request.user
+    user_id = user.get("uid")
+    admin = is_admin(user)
 
     workout = Workout.query.get_or_404(workout_id)
     if not admin and workout.user_id != user_id:

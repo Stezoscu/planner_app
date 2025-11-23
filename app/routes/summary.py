@@ -1,25 +1,36 @@
 from flask import Blueprint, jsonify, request
-from flask_jwt_extended import jwt_required, get_jwt_identity
 from datetime import datetime, date
 from ..extensions import db
-from ..models.core_models import Task, Meal, Workout
-from .auth import is_admin
+from ..models.core_models import Task, Meal, Workout, User
+from ..firebase_utils import firebase_required
 
 summary_bp = Blueprint("summary", __name__)
 
-@summary_bp.route("/today", methods=["GET"])
-@jwt_required()
-def get_today_summary():
-    """Return today's tasks, meals, and workouts for the current user (or another if admin)."""
-    identity = get_jwt_identity()
-    user_id = identity["id"]
-    query_user_id = request.args.get("user_id", type=int)
+# --- Helper: Check admin role ---
+def is_admin(user):
+    """Check if the Firebase-authenticated user is an admin in the DB."""
+    db_user = User.query.filter_by(id=user.get("uid")).first()
+    return db_user and db_user.role == "admin"
 
-    # Admins can specify ?user_id=...
-    if query_user_id and is_admin(identity):
-        user_id = query_user_id
-    elif query_user_id and not is_admin(identity):
-        return jsonify({"error": "Admin access required to view other users' summaries"}), 403
+
+# --- Today's summary ---
+@summary_bp.route("/today", methods=["GET"])
+@firebase_required
+def get_today_summary():
+    """
+    Return today's tasks, meals, and workouts for the current user,
+    or another user's if admin passes ?user_id=.
+    """
+    user = request.user
+    user_id = user.get("uid")
+    admin = is_admin(user)
+    query_user_id = request.args.get("user_id")
+
+    if query_user_id:
+        if admin:
+            user_id = query_user_id
+        else:
+            return jsonify({"error": "Admin access required to view other users’ summaries"}), 403
 
     today = date.today()
 
@@ -46,7 +57,14 @@ def get_today_summary():
             for t in tasks
         ],
         "meals": [
-            {"id": m.id, "name": m.name, "calories": m.calories, "protein": m.protein, "carbs": m.carbs}
+            {
+                "id": m.id,
+                "name": m.name,
+                "calories": m.calories,
+                "protein": m.protein,
+                "carbs": m.carbs,
+                "fibre": m.fibre,
+            }
             for m in meals
         ],
         "workouts": [
@@ -55,16 +73,27 @@ def get_today_summary():
         ],
     }
 
-# --- Date range summary ---
+    return jsonify(summary), 200
+
+
+# --- Range summary ---
 @summary_bp.route("/range", methods=["GET"])
-@jwt_required()
+@firebase_required
 def get_range_summary():
     """
     Return tasks, meals, and workouts for a date range (inclusive).
-    Query params: ?start=YYYY-MM-DD&end=YYYY-MM-DD
+    Query params: ?start=YYYY-MM-DD&end=YYYY-MM-DD[&user_id=]
     """
-    identity = get_jwt_identity()
-    user_id = identity["id"]
+    user = request.user
+    user_id = user.get("uid")
+    admin = is_admin(user)
+    query_user_id = request.args.get("user_id")
+
+    if query_user_id:
+        if admin:
+            user_id = query_user_id
+        else:
+            return jsonify({"error": "Admin access required to view other users’ data"}), 403
 
     start_str = request.args.get("start")
     end_str = request.args.get("end")
@@ -84,30 +113,24 @@ def get_range_summary():
     return _get_summary_for_range(user_id, start_date, end_date)
 
 
-# --- Helper function shared by both endpoints ---
+# --- Helper shared by both endpoints ---
 def _get_summary_for_range(user_id, start_date, end_date):
-    # --- Tasks ---
     tasks = (
         Task.query.filter_by(user_id=user_id)
         .filter(db.func.date(Task.due_date).between(start_date, end_date))
         .all()
     )
-
-    # --- Meals ---
     meals = (
         Meal.query.filter_by(user_id=user_id)
         .filter(db.func.date(Meal.date).between(start_date, end_date))
         .all()
     )
-
-    # --- Workouts ---
     workouts = (
         Workout.query.filter_by(user_id=user_id)
         .filter(db.func.date(Workout.date).between(start_date, end_date))
         .all()
     )
 
-    # --- Totals ---
     total_calories = sum(m.calories or 0 for m in meals)
     total_protein = sum(m.protein or 0 for m in meals)
     total_carbs = sum(m.carbs or 0 for m in meals)
@@ -132,13 +155,25 @@ def _get_summary_for_range(user_id, start_date, end_date):
             for t in tasks
         ],
         "meals": [
-            {"id": m.id, "name": m.name, "calories": m.calories, "protein": m.protein, "carbs": m.carbs, "fibre": m.fibre}
+            {
+                "id": m.id,
+                "name": m.name,
+                "calories": m.calories,
+                "protein": m.protein,
+                "carbs": m.carbs,
+                "fibre": m.fibre,
+            }
             for m in meals
         ],
         "workouts": [
-            {"id": w.id, "activity": w.activity, "duration": w.duration, "date": w.date.isoformat()}
+            {
+                "id": w.id,
+                "activity": w.activity,
+                "duration": w.duration,
+                "date": w.date.isoformat(),
+            }
             for w in workouts
         ],
     }
 
-    return jsonify(summary)
+    return jsonify(summary), 200
